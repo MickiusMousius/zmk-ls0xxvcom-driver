@@ -1,0 +1,36 @@
+/*
+ * Copyright (c) 2020 Rohit Gujarathi
+ * Copyright (c) 2025 eden ariel
+ *
+ * Based on work under the same license by NiceII
+ * in Zephyr #50935
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+// clang-format Language: C
+
+/* Supports LS012B7DD01, LS012B7DD06, LS013B7DH03, LS013B7DH05
+ * LS013B7DH06, LS027B7DH01A, LS032B7DD02, LS044Q7DH01
+ */
+
+/* Note:
+ * -> high/1 means white, low/0 means black
+ * -> Display expects LSB first
+ */
+
+#define LS0XX_PANEL_WIDTH     DT_INST_PROP(0, width)
+#define LS0XX_PANEL_HEIGHT    DT_INST_PROP(0, height)
+
+#define LS0XX_PIXELS_PER_BYTE 8U
+/* Adding 2 for the line number and dummy byte
+ * line_buf format for each row.
+ * +-------------------+-------------------+----------------+
+ * | line num (8 bits) | data (WIDTH bits) | dummy (8 bits) |
+ * +-------------------+-------------------+----------------+
+ */
+#define LS0XX_BYTES_PER_LINE  ((LS0XX_PANEL_WIDTH / LS0XX_PIXELS_PER_BYTE) + 2)
+
+#define LS0XX_BIT_WRITECMD    0x01
+#define LS0XX_BIT_VCOM        0x02
+#define LS0XX_BIT_CLEAR       0x04
+#define LS0XX_MAX_VCOM_MSEC   1000

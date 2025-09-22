@@ -1,0 +1,8 @@
+name: coquette
+build:
+  settings:
+    snippet_root: .
+    board_root: .
+    dts_root: .
+  cmake: .
+  kconfig: Kconfig

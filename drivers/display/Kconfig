@@ -1,0 +1,10 @@
+# Copyright (c) 2025 eden ariel and ember ana
+#
+# SPDX-License-Identifier: EUPL-1.2
+
+if DISPLAY
+
+source "$(ZEPHYR_COQUETTE_MODULE_DIR)/drivers/display/Kconfig.ls0xxvcom"
+
+endif # DISPLAY
+

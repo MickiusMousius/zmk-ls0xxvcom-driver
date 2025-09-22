@@ -1,0 +1,10 @@
+# Copyright (c) 2025 eden ariel and ember ana
+# SPDX-License-Identifier: EUPL-1.2
+
+config DISPLAY_LS0XX_VCOM
+	bool "sharp memory display with serial vcom support"
+	default y
+	depends on DT_HAS_SHARP_LS0XX_VCOM_ENABLED
+	select SPI
+	help
+	  modified sharp memory display driver to add serial vcom support
