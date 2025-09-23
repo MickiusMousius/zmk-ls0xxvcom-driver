@@ -1,9 +1,6 @@
 /*
- * Copyright (c) 2020 Rohit Gujarathi
  * Copyright (c) 2025 eden ariel
- *
- * Based on work under the same license by NiceII
- * in Zephyr #50935
+ * ls0xx display driver headers
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -18,8 +15,8 @@
  * -> Display expects LSB first
  */
 
-#define LS0XX_PANEL_WIDTH     DT_INST_PROP(0, width)
-#define LS0XX_PANEL_HEIGHT    DT_INST_PROP(0, height)
+#define LS0XX_PANEL_WIDTH  DT_INST_PROP(0, width)
+#define LS0XX_PANEL_HEIGHT DT_INST_PROP(0, height)
 
 #define LS0XX_PIXELS_PER_BYTE 8U
 /* Adding 2 for the line number and dummy byte
@@ -30,7 +27,11 @@
  */
 #define LS0XX_BYTES_PER_LINE  ((LS0XX_PANEL_WIDTH / LS0XX_PIXELS_PER_BYTE) + 2)
 
-#define LS0XX_BIT_WRITECMD    0x01
-#define LS0XX_BIT_VCOM        0x02
-#define LS0XX_BIT_CLEAR       0x04
-#define LS0XX_MAX_VCOM_MSEC   1000
+#define LS0XX_BIT_WRITECMD  0x01
+#define LS0XX_BIT_VCOM      0x02
+#define LS0XX_BIT_CLEAR     0x04
+#define LS0XX_MAX_VCOM_MSEC 1000
+
+struct ls0xx_data {
+	bool vcom_state;
+};
