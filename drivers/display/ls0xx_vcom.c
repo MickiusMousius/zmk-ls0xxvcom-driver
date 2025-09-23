@@ -20,7 +20,7 @@ LOG_MODULE_REGISTER(ls0xx, CONFIG_DISPLAY_LOG_LEVEL);
 #include <zephyr/init.h>
 #include <zephyr/sys/byteorder.h>
 
-#include "ls0xx_vcom.h"
+#include <display/ls0xx_vcom.h>
 
 #if DT_INST_PROP(0, serial_vcom_inversion)
 #define USE_VCOM_THREAD true
