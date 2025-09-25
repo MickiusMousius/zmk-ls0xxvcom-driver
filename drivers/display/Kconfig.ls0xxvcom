@@ -1,5 +1,5 @@
 # Copyright (c) 2025 eden ariel and ember ana
-# SPDX-License-Identifier: EUPL-1.2
+# SPDX-License-Identifier: Apache-2.0
 
 config DISPLAY_LS0XX_VCOM
 	bool "sharp memory display with serial vcom support"
