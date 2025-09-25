@@ -4,7 +4,7 @@
 
 if DISPLAY
 
-source "$(ZEPHYR_COQUETTE_MODULE_DIR)/drivers/display/Kconfig.ls0xxvcom"
+source "$(ZEPHYR_LS0XXVCOM_MODULE_DIR)/drivers/display/Kconfig.ls0xxvcom"
 
 endif # DISPLAY
 
