@@ -4,7 +4,7 @@ It prevents display damage.
 
 Sharp Memory LCDs require regular VCOM inversion to prevent permanent damage from DC bias buildup.
 
-The original Zephyr implementation does not satisfy this requirement, potentially causing electrolytic degradation of the liquid crystal material over time.
+The original Zephyr implementation does not satisfy this requirement (As at September 2025), potentially causing electrolytic degradation of the liquid crystal material over time.
 
 # Do I need to update to this driver right now?
 
@@ -82,9 +82,24 @@ An interval of at most 1000ms should be used, this may produce some flickering. 
 
 A shorter refresh interval will produce a more contrasty image. It will also slightly increase power consumption.
 
+# Testing Performed So Far
+
+I have tested this code using the most current ZMK release as of Septmberr 2025, here are the results of that testing:
+ * LS027B7DH01A - Works a treat, greatly improves contrast
+ * LS013B7DH05 - Works a treat, noticeable improvement in contrast, not as pronounced as above display type
+ * LS011B7DH03 - Works well, some improvement in contrast but difference is marginal (the display being tested was much newer than the other two displays)
+
+I have observed that old displays improve contrast & have less power off ghosting after running with this update.
+
+Display flickering is noticeable on LS013B7DH05 & LS027B7DH01A at anything less than 33ms refresh interval when viewed off axis. Using an interval of 17ms produces perfect results with excellent contrast & no flickering.
+
+There is no image corruption or apparent bus fighting when using this updated driver.
+
+Higher refresh rates do produce higher energy consumption, however this was tested to be 80uA in the worst case.
+
 # Attribution
 
-The updated driver has been copied from the [coquette repository](https://ravy.dev/coquette/z-module-coquette) with express permission.
+The updated driver has been copied from the [coquette repository](https://ravy.dev/coquette/z-module-coquette) with express permission. The driver has been updated for use with Zephyr 3.5 whereas the coquette work has been done for use with Zephyr 4.1.
 
 The original driver was taken from the [Zephyr project](https://github.com/zephyrproject-rtos/zephyr/blob/main/drivers/display/ls0xx.c).
 
