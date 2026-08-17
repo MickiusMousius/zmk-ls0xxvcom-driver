@@ -48,3 +48,8 @@ properties:
       there is no EXTCOMIN configured and serial-vcom inversion is set.
       If not configured, 1000ms will be used.
 
+  rotate-180:
+    type: boolean
+    description: Natively rotate the display output 180 degrees
+
+

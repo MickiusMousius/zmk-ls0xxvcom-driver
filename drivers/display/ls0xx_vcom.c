@@ -136,6 +136,13 @@ static int ls0xx_clear(const struct device *dev)
 	return err;
 }
 
+static inline uint8_t reverse_byte(uint8_t b) {
+	b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;
+	b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
+	b = (b & 0xAA) >> 1 | (b & 0x55) << 1;
+	return b;
+}
+
 static int ls0xx_update_display(const struct device *dev, uint16_t start_line, uint16_t num_lines,
 				const uint8_t *data)
 {
@@ -149,7 +156,7 @@ static int ls0xx_update_display(const struct device *dev, uint16_t start_line, u
 			.buf = &ln,
 		},
 		{
-			.len = LS0XX_BYTES_PER_LINE - 2,
+			.len = LS0XX_PANEL_WIDTH / LS0XX_PIXELS_PER_BYTE,
 		},
 		{
 			.len = sizeof(dummy),
@@ -161,17 +168,32 @@ static int ls0xx_update_display(const struct device *dev, uint16_t start_line, u
 		.count = ARRAY_SIZE(line_buf),
 	};
 	int err;
+
+#if DT_INST_PROP(0, rotate_180)
+	uint8_t row_buf[LS0XX_PANEL_WIDTH / LS0XX_PIXELS_PER_BYTE];
+#endif
+	int bytes_per_line = LS0XX_PANEL_WIDTH / LS0XX_PIXELS_PER_BYTE;
+
 	LOG_DBG("Lines %d to %d", start_line, start_line + num_lines - 1);
 	if (k_mutex_lock(&ls0xx_spi_mutex, K_MSEC(240)) == 0) {
 		err = ls0xx_cmd(dev, write_cmd, sizeof(write_cmd));
 
-		/* Send each line to the screen including
-		 * the line number and dummy bits
-		 */
-		for (; ln <= start_line + num_lines - 1; ln++) {
+		for (int i = 0; i < num_lines; i++) {
+			uint16_t current_logical_line = start_line + i;
+
+#if DT_INST_PROP(0, rotate_180)
+			ln = LS0XX_PANEL_HEIGHT - current_logical_line + 1;
+			for (int j = 0; j < bytes_per_line; j++) {
+				row_buf[j] = reverse_byte(data[bytes_per_line - 1 - j]);
+			}
+			line_buf[1].buf = row_buf;
+#else
+			ln = current_logical_line;
 			line_buf[1].buf = (uint8_t *)data;
+#endif
+
 			err |= spi_write_dt(&config->bus, &line_set);
-			data += LS0XX_PANEL_WIDTH / LS0XX_PIXELS_PER_BYTE;
+			data += bytes_per_line;
 		}
 
 		/* Send another trailing 8 bits for the last line
