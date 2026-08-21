@@ -58,9 +58,11 @@ If this is all you do, the new VCOM inversion signals will not be getting sent t
   status = "okay";
   vista508: ls0xx@0 {
     compatible = "sharp,ls0xx-vcom";
-    spi-max-frequency = <1000000>;
+    spi-max-frequency = <2000000>;
     serial-vcom-inversion;
     serial-vcom-interval = <17>;
+    idle-vcom-interval = <100>;
+    dma-mode;
     reg = <0>;
     width = <144>;
     height = <168>;
@@ -70,17 +72,33 @@ If this is all you do, the new VCOM inversion signals will not be getting sent t
 
 You will find this in your display's overlay file (e.g., `boards/vista508/vista508.overlay`).
 
-The following three new lines have been added:
+The following four new lines have been added:
 
 ```c
 serial-vcom-inversion;
 serial-vcom-interval = <17>;
 idle-vcom-interval = <100>;
+dma-mode;
 ```
 
 - The first line enables the inversion fix
 - The second line (`serial-vcom-interval`) is the inversion interval in milliseconds used when the screen is **active and visible**. To eliminate flickering, an interval of 17-33ms should be used.
 - The third line (`idle-vcom-interval`) is the inversion interval used when the screen is **blanked (idle)**. This defaults to 1000ms if omitted.
+- The fourth line (`dma-mode`) enables **SPI Batching**. This allocates a single buffer in RAM to format the entire screen frame at once, allowing the DMA hardware to send it to the display in a single transaction while the CPU sleeps.
+
+### Performance: Why `dma-mode` matters
+
+Without `dma-mode`, the driver sends pixel data to the display one line at a time. This means the number of individual SPI transactions per frame is equal to your display's pixel height (e.g., 168 separate transactions for a 144x168 display). This forces the MCU to wake up and handle hardware interrupts for every single line.
+
+Enabling `dma-mode` reduces this to **1 transaction per frame**, cutting the CPU interrupt overhead by over 99% regardless of your display size.
+
+**Pros:**
+* Drastically reduces active CPU time during display updates.
+* Increases battery life by allowing the CPU to sleep while the DMA hardware handles the SPI transfer.
+* Reduces bus contention if other devices share the SPI bus.
+
+**Cons:**
+* Increases static RAM (SRAM) usage by roughly `(Display Height) * (Display Width in Bytes + 2)` bytes. For a 144x168 display, this uses about 3.3 KB of RAM. (This is generally insignificant on modern microcontrollers like the nRF52840 which has 256 KB of RAM, but could be a factor on severely RAM-constrained chips).
 
 ### Power Analysis: Why `idle-vcom-interval` matters
 

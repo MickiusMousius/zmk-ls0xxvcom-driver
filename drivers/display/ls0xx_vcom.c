@@ -28,7 +28,13 @@ LOG_MODULE_REGISTER(ls0xx, CONFIG_DISPLAY_LOG_LEVEL);
 #define USE_VCOM_THREAD true
 #endif // DT_INST_PROP(0, serial_vcom_inversion)
 
-#define LS0XX_BUS_RETURN_DELAY_TICKS 4
+#if DT_INST_PROP(0, dma_mode)
+#define USE_DMA_MODE true
+#define LS0XX_BYTES_PER_LINE ((LS0XX_PANEL_WIDTH / LS0XX_PIXELS_PER_BYTE) + 2)
+static uint8_t ls0xx_dma_buf[LS0XX_PANEL_HEIGHT * LS0XX_BYTES_PER_LINE];
+#endif
+
+#define LS0XX_BUS_RETURN_DELAY_US 3
 
 struct ls0xx_config {
 	struct spi_dt_spec bus;
@@ -120,7 +126,7 @@ static void ls0xx_vcom_toggle_handler(struct k_work *work)
 		/* Send empty command to toggle VCOM */
 		ls0xx_cmd(dev, empty_cmd, sizeof(empty_cmd));
 		/* Sleep before giving semaphore based on errors in testing */
-		k_sleep(K_TICKS(LS0XX_BUS_RETURN_DELAY_TICKS));
+		k_busy_wait(LS0XX_BUS_RETURN_DELAY_US);
 		spi_release_dt(&config->bus);
 		k_sem_give(&ls0xx_bus_sem);
 	} else {
@@ -138,7 +144,7 @@ static int ls0xx_clear(const struct device *dev)
 	int err;
 	if (k_sem_take(&ls0xx_bus_sem, K_MSEC(240)) == 0) {
 		err = ls0xx_cmd(dev, clear_cmd, sizeof(clear_cmd));
-		k_sleep(K_TICKS(LS0XX_BUS_RETURN_DELAY_TICKS));
+		k_busy_wait(LS0XX_BUS_RETURN_DELAY_US);
 		spi_release_dt(&config->bus);
 		k_sem_give(&ls0xx_bus_sem);
 	} else {
@@ -198,6 +204,36 @@ static int ls0xx_update_display(const struct device *dev, uint16_t start_line, u
 	if (k_sem_take(&ls0xx_bus_sem, K_MSEC(240)) == 0) {
 		err = ls0xx_cmd(dev, write_cmd, sizeof(write_cmd));
 
+#ifdef USE_DMA_MODE
+		int tx_line_len = bytes_per_line + 2;
+		for (int i = 0; i < num_lines; i++) {
+			uint16_t current_logical_line = start_line + i;
+			uint8_t *dest = &ls0xx_dma_buf[i * tx_line_len];
+			
+#if DT_INST_PROP(0, rotate_180)
+			dest[0] = LS0XX_PANEL_HEIGHT - current_logical_line + 1;
+			int words = bytes_per_line / 4;
+			for (int j = 0; j < words; j++) {
+				uint32_t val;
+				memcpy(&val, data + bytes_per_line - 4 - (j * 4), 4);
+				val = ls0xx_bitreverse32(val);
+				memcpy(dest + 1 + (j * 4), &val, 4);
+			}
+			for (int j = words * 4; j < bytes_per_line; j++) {
+				dest[1 + j] = reverse_byte(data[bytes_per_line - 1 - j]);
+			}
+#else
+			dest[0] = current_logical_line;
+			memcpy(dest + 1, data, bytes_per_line);
+#endif
+			dest[1 + bytes_per_line] = 0; /* Dummy byte */
+			data += bytes_per_line;
+		}
+
+		struct spi_buf dma_spi_buf = { .buf = ls0xx_dma_buf, .len = num_lines * tx_line_len };
+		struct spi_buf_set dma_line_set = { .buffers = &dma_spi_buf, .count = 1 };
+		err |= spi_write_dt(&config->bus, &dma_line_set);
+#else
 		for (int i = 0; i < num_lines; i++) {
 			uint16_t current_logical_line = start_line + i;
 
@@ -224,13 +260,14 @@ static int ls0xx_update_display(const struct device *dev, uint16_t start_line, u
 			err |= spi_write_dt(&config->bus, &line_set);
 			data += bytes_per_line;
 		}
+#endif
 
 		/* Send another trailing 8 bits for the last line
 		 * These can be any bits, it does not matter
 		 * just reusing the write_cmd buffer
 		 */
 		err |= ls0xx_cmd(dev, write_cmd, sizeof(write_cmd));
-		k_sleep(K_TICKS(LS0XX_BUS_RETURN_DELAY_TICKS));
+		k_busy_wait(LS0XX_BUS_RETURN_DELAY_US);
 		spi_release_dt(&config->bus);
 		k_sem_give(&ls0xx_bus_sem);
 	} else {

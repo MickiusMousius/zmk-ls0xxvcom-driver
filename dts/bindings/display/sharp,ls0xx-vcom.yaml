@@ -59,3 +59,11 @@ properties:
 
       VCOM inversion interval in milliseconds used when the display is
       blanked (idle). If not configured, 1000ms will be used.
+
+  dma-mode:
+    type: boolean
+    description: Enable single-buffer DMA SPI batching for performance
+
+      If enabled, the driver allocates a contiguous RAM buffer to format
+      the entire frame and sends it in a single DMA-accelerated SPI
+      transaction, significantly reducing MCU interrupt overhead.
