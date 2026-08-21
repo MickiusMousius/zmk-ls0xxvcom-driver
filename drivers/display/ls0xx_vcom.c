@@ -51,11 +51,18 @@ static int ls0xx_blanking_off(const struct device *dev)
 #if DT_INST_NODE_HAS_PROP(0, disp_en_gpios)
 	const struct ls0xx_config *config = dev->config;
 
-	return gpio_pin_set_dt(&config->disp_en_gpio, 1);
+	int ret = gpio_pin_set_dt(&config->disp_en_gpio, 1);
 #else
 	LOG_WRN("Unsupported");
-	return -ENOTSUP;
+	int ret = -ENOTSUP;
 #endif
+#ifdef USE_VCOM_THREAD
+	struct ls0xx_data *data = dev->data;
+	const struct ls0xx_config *config_vcom = dev->config;
+	data->current_vcom_interval = config_vcom->serial_vcom_int;
+	k_work_reschedule(&data->vcom_toggle_work, K_MSEC(data->current_vcom_interval));
+#endif
+	return ret;
 }
 
 static int ls0xx_blanking_on(const struct device *dev)
@@ -63,11 +70,17 @@ static int ls0xx_blanking_on(const struct device *dev)
 #if DT_INST_NODE_HAS_PROP(0, disp_en_gpios)
 	const struct ls0xx_config *config = dev->config;
 
-	return gpio_pin_set_dt(&config->disp_en_gpio, 0);
+	int ret = gpio_pin_set_dt(&config->disp_en_gpio, 0);
 #else
 	LOG_WRN("Unsupported");
-	return -ENOTSUP;
+	int ret = -ENOTSUP;
 #endif
+#ifdef USE_VCOM_THREAD
+	struct ls0xx_data *data = dev->data;
+	data->current_vcom_interval = 1000;
+	k_work_reschedule(&data->vcom_toggle_work, K_MSEC(data->current_vcom_interval));
+#endif
+	return ret;
 }
 
 static int ls0xx_cmd(const struct device *dev, uint8_t *buf, uint8_t len)
@@ -88,37 +101,32 @@ static int ls0xx_cmd(const struct device *dev, uint8_t *buf, uint8_t len)
 
 #ifdef USE_VCOM_THREAD
 /* Driver will handle VCOM toggling */
-static void ls0xx_vcom_toggle(void *a, void *b, void *c)
+static void ls0xx_vcom_toggle_handler(struct k_work *work)
 {
-	const struct device *dev = a;
+	struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+	struct ls0xx_data *data = CONTAINER_OF(dwork, struct ls0xx_data, vcom_toggle_work);
+	const struct device *dev = DEVICE_DT_INST_GET(0);
 	const struct ls0xx_config *config = dev->config;
-	while (1) {
-#if DT_INST_NODE_HAS_PROP(0, extcomin_gpios)
-		gpio_pin_toggle_dt(&config->extcomin_gpio);
-		k_usleep(3);
-		gpio_pin_toggle_dt(&config->extcomin_gpio);
-		k_msleep(1000 / DT_INST_PROP(0, extcomin_frequency));
-#elif DT_INST_PROP(0, serial_vcom_inversion)
-		/* Waits up to 240ms as if the screen isn't free by this point,
-		multiple refresh cycles were likey missed */
-		if (k_sem_take(&ls0xx_bus_sem, K_MSEC(240)) == 0) {
-			uint8_t empty_cmd[2] = {0, 0};
-			/* Send empty command to toggle VCOM */
-			ls0xx_cmd(dev, empty_cmd, sizeof(empty_cmd));
-			/* Sleep before giving semaphore based on errors in testing */
-			k_sleep(K_TICKS(LS0XX_BUS_RETURN_DELAY_TICKS));
-			spi_release_dt(&config->bus);
-			k_sem_give(&ls0xx_bus_sem);
-		} else {
-			LOG_ERR("memory display semaphore not available - cmd");
-		}
-		k_msleep(config->serial_vcom_int);
-#endif // DT_INST_NODE_HAS_PROP(0, extcomin_gpios)
-	}
-}
 
-K_THREAD_STACK_DEFINE(vcom_toggle_stack, 512);
-struct k_thread vcom_toggle_thread;
+#if DT_INST_NODE_HAS_PROP(0, extcomin_gpios)
+	gpio_pin_toggle_dt(&config->extcomin_gpio);
+	k_usleep(3);
+	gpio_pin_toggle_dt(&config->extcomin_gpio);
+#elif DT_INST_PROP(0, serial_vcom_inversion)
+	if (k_sem_take(&ls0xx_bus_sem, K_MSEC(240)) == 0) {
+		uint8_t empty_cmd[2] = {0, 0};
+		/* Send empty command to toggle VCOM */
+		ls0xx_cmd(dev, empty_cmd, sizeof(empty_cmd));
+		/* Sleep before giving semaphore based on errors in testing */
+		k_sleep(K_TICKS(LS0XX_BUS_RETURN_DELAY_TICKS));
+		spi_release_dt(&config->bus);
+		k_sem_give(&ls0xx_bus_sem);
+	} else {
+		LOG_ERR("memory display semaphore not available - cmd");
+	}
+#endif // DT_INST_NODE_HAS_PROP(0, extcomin_gpios)
+	k_work_reschedule(&data->vcom_toggle_work, K_MSEC(data->current_vcom_interval));
+}
 #endif // USE_VCOM_THREAD
 
 static int ls0xx_clear(const struct device *dev)
@@ -143,6 +151,14 @@ static inline uint8_t reverse_byte(uint8_t b) {
 	b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
 	b = (b & 0xAA) >> 1 | (b & 0x55) << 1;
 	return b;
+}
+
+static inline uint32_t ls0xx_bitreverse32(uint32_t x) {
+	x = (((x & 0xaaaaaaaa) >> 1) | ((x & 0x55555555) << 1));
+	x = (((x & 0xcccccccc) >> 2) | ((x & 0x33333333) << 2));
+	x = (((x & 0xf0f0f0f0) >> 4) | ((x & 0x0f0f0f0f) << 4));
+	x = (((x & 0xff00ff00) >> 8) | ((x & 0x00ff00ff) << 8));
+	return ((x >> 16) | (x << 16));
 }
 
 static int ls0xx_update_display(const struct device *dev, uint16_t start_line, uint16_t num_lines,
@@ -185,7 +201,16 @@ static int ls0xx_update_display(const struct device *dev, uint16_t start_line, u
 
 #if DT_INST_PROP(0, rotate_180)
 			ln = LS0XX_PANEL_HEIGHT - current_logical_line + 1;
-			for (int j = 0; j < bytes_per_line; j++) {
+			/* Hardware accelerated bit/byte reversal using RBIT */
+			int words = bytes_per_line / 4;
+			for (int j = 0; j < words; j++) {
+				uint32_t val;
+				memcpy(&val, data + bytes_per_line - 4 - (j * 4), 4);
+				val = ls0xx_bitreverse32(val);
+				memcpy(row_buf + (j * 4), &val, 4);
+			}
+			/* Handle remaining bytes if width is not a multiple of 32 bits */
+			for (int j = words * 4; j < bytes_per_line; j++) {
 				row_buf[j] = reverse_byte(data[bytes_per_line - 1 - j]);
 			}
 			line_buf[1].buf = row_buf;
@@ -210,6 +235,10 @@ static int ls0xx_update_display(const struct device *dev, uint16_t start_line, u
 		LOG_ERR("memory display semaphore not available - refresh data");
 		err = -EBUSY;
 	}
+#ifdef USE_VCOM_THREAD
+	struct ls0xx_data *driver_data = dev->data;
+	k_work_reschedule(&driver_data->vcom_toggle_work, K_MSEC(driver_data->current_vcom_interval));
+#endif
 	return err;
 }
 
@@ -330,11 +359,10 @@ static int ls0xx_init(const struct device *dev)
 	/* Give the semaphore to allow bus access */
 	k_sem_give(&ls0xx_bus_sem);
 #ifdef USE_VCOM_THREAD
-	/* Start thread for toggling VCOM */
-	k_tid_t vcom_toggle_tid = k_thread_create(
-		&vcom_toggle_thread, vcom_toggle_stack, K_THREAD_STACK_SIZEOF(vcom_toggle_stack),
-		ls0xx_vcom_toggle, (void *)dev, NULL, NULL, CONFIG_LS0XX_VCOM_THREAD_PRIO, 0, K_NO_WAIT);
-	k_thread_name_set(vcom_toggle_tid, "ls0xx_vcom");
+	/* Initialize dynamic VCOM toggling */
+	k_work_init_delayable(&data->vcom_toggle_work, ls0xx_vcom_toggle_handler);
+	data->current_vcom_interval = config->serial_vcom_int;
+	k_work_reschedule(&data->vcom_toggle_work, K_MSEC(data->current_vcom_interval));
 #endif // USE_VCOM_THREAD
 
 	/* Clear display else it shows random data */
@@ -356,7 +384,9 @@ static const struct ls0xx_config ls0xx_config = {
 #endif
 #if DT_INST_PROP(0, serial_vcom_inversion)
 	.serial_vcom_int = DT_INST_PROP_OR(0, serial_vcom_interval, LS0XX_MAX_VCOM_MSEC)
-#endif // DT_INST_PROP(0, serial_vcom_inversion)
+#elif DT_INST_NODE_HAS_PROP(0, extcomin_gpios)
+	.serial_vcom_int = 1000 / DT_INST_PROP(0, extcomin_frequency)
+#endif
 };
 
 static struct display_driver_api ls0xx_driver_api = {

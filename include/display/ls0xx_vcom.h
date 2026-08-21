@@ -32,6 +32,10 @@
 #define LS0XX_BIT_CLEAR     0x04
 #define LS0XX_MAX_VCOM_MSEC 1000
 
+#include <zephyr/kernel.h>
+
 struct ls0xx_data {
 	bool vcom_state;
+	struct k_work_delayable vcom_toggle_work;
+	uint32_t current_vcom_interval;
 };
