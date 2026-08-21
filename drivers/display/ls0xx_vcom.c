@@ -23,6 +23,21 @@ LOG_MODULE_REGISTER(ls0xx, CONFIG_DISPLAY_LOG_LEVEL);
 
 #include <display/ls0xx_vcom.h>
 
+/* ==============================================================================
+ * ZMK/Zephyr Sharp Memory Display Driver (Optimized)
+ * 
+ * This driver includes several critical performance and battery optimizations:
+ * 1. VCOM Inversion Duty Cycle: A strict 50% duty cycle is maintained during
+ *    screen updates to prevent DC bias capacitive buildup.
+ * 2. DMA Batching (USE_DMA_MODE): Frames are assembled in a single RAM buffer
+ *    and transmitted via a single hardware DMA call, cutting CPU interrupts by >99%.
+ * 3. Deep Sleep (PM_DEVICE): VCOM polling is entirely suspended during MCU 
+ *    system-level suspend, drastically reducing deep-sleep power consumption.
+ * 4. Dual VCOM Intervals: Allows a fast VCOM refresh while active (to prevent 
+ *    flicker) and a slow refresh while idle (to save battery).
+ * ==============================================================================
+ */
+
 #if DT_INST_PROP(0, serial_vcom_inversion)
 #define USE_VCOM_THREAD true
 #elif DT_INST_NODE_HAS_PROP(0, extcomin_gpios)
@@ -65,6 +80,7 @@ static int ls0xx_blanking_off(const struct device *dev)
 	int ret = -ENOTSUP;
 #endif
 #ifdef USE_VCOM_THREAD
+	/* Screen is active: Switch to the faster serial_vcom_interval to prevent flicker */
 	struct ls0xx_data *data = dev->data;
 	const struct ls0xx_config *config_vcom = dev->config;
 	data->current_vcom_interval = config_vcom->serial_vcom_int;
@@ -84,6 +100,9 @@ static int ls0xx_blanking_on(const struct device *dev)
 	int ret = -ENOTSUP;
 #endif
 #ifdef USE_VCOM_THREAD
+	/* Screen is idle: Switch to the slower idle_vcom_interval to save battery
+	 * since flickering is much less noticeable on a blank screen.
+	 */
 	struct ls0xx_data *data = dev->data;
 	const struct ls0xx_config *config_vcom = dev->config;
 	data->current_vcom_interval = config_vcom->idle_vcom_int;
@@ -122,12 +141,20 @@ static void ls0xx_vcom_toggle_handler(struct k_work *work)
 	k_usleep(3);
 	gpio_pin_toggle_dt(&config->extcomin_gpio);
 #elif DT_INST_PROP(0, serial_vcom_inversion)
+	/* Ensure a strict 50% duty cycle for the VCOM bit.
+	 * We toggle our internal vcom_state ONLY inside this timer, decoupling it 
+	 * from the erratic screen-update frequency. This prevents DC bias from 
+	 * building up when the user types rapidly.
+	 */
 	data->vcom_state = !data->vcom_state;
 	if (k_sem_take(&ls0xx_bus_sem, K_MSEC(240)) == 0) {
 		uint8_t empty_cmd[2] = {0, 0};
 		/* Send empty command to toggle VCOM */
 		ls0xx_cmd(dev, empty_cmd, sizeof(empty_cmd));
-		/* Sleep before giving semaphore based on errors in testing */
+		/* Sleep before giving semaphore based on errors in testing
+		 * Uses busy_wait instead of k_sleep to ensure precise microsecond hold
+		 * times without context switching overhead.
+		 */
 		k_busy_wait(LS0XX_BUS_RETURN_DELAY_US);
 		spi_release_dt(&config->bus);
 		k_sem_give(&ls0xx_bus_sem);
@@ -207,6 +234,14 @@ static int ls0xx_update_display(const struct device *dev, uint16_t start_line, u
 		err = ls0xx_cmd(dev, write_cmd, sizeof(write_cmd));
 
 #ifdef USE_DMA_MODE
+		/* =========================================================================
+		 * DMA BATCHING OPTIMIZATION
+		 * Instead of sending 168 individual SPI transactions (one for each line),
+		 * we assemble the entire frame in a contiguous block of SRAM (ls0xx_dma_buf)
+		 * and send it via a single spi_write_dt call. This cuts Zephyr CPU API 
+		 * overhead by >99%, allowing the CPU to sleep during the DMA transfer.
+		 * =========================================================================
+		 */
 		int tx_line_len = bytes_per_line + 2;
 		for (int i = 0; i < num_lines; i++) {
 			uint16_t current_logical_line = start_line + i;
@@ -452,11 +487,15 @@ static int ls0xx_pm_action(const struct device *dev, enum pm_device_action actio
 	switch (action) {
 	case PM_DEVICE_ACTION_SUSPEND:
 #ifdef USE_VCOM_THREAD
+		/* Stop firing VCOM interrupts when the entire MCU is put into deep sleep
+		 * to prevent the timer from repeatedly waking the CPU and draining battery.
+		 */
 		k_work_cancel_delayable(&data->vcom_toggle_work);
 #endif
 		break;
 	case PM_DEVICE_ACTION_RESUME:
 #ifdef USE_VCOM_THREAD
+		/* Resume VCOM toggling when MCU wakes up */
 		k_work_reschedule(&data->vcom_toggle_work, K_MSEC(data->current_vcom_interval));
 #endif
 		break;
