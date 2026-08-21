@@ -19,6 +19,7 @@ LOG_MODULE_REGISTER(ls0xx, CONFIG_DISPLAY_LOG_LEVEL);
 #include <zephyr/drivers/spi.h>
 #include <zephyr/init.h>
 #include <zephyr/sys/byteorder.h>
+#include <zephyr/pm/device.h>
 
 #include <display/ls0xx_vcom.h>
 
@@ -443,5 +444,30 @@ static struct display_driver_api ls0xx_driver_api = {
 	.set_orientation = ls0xx_set_orientation,
 };
 
-DEVICE_DT_INST_DEFINE(0, ls0xx_init, NULL, &ls0xx_data, &ls0xx_config, POST_KERNEL,
+#ifdef CONFIG_PM_DEVICE
+static int ls0xx_pm_action(const struct device *dev, enum pm_device_action action)
+{
+	struct ls0xx_data *data = dev->data;
+
+	switch (action) {
+	case PM_DEVICE_ACTION_SUSPEND:
+#ifdef USE_VCOM_THREAD
+		k_work_cancel_delayable(&data->vcom_toggle_work);
+#endif
+		break;
+	case PM_DEVICE_ACTION_RESUME:
+#ifdef USE_VCOM_THREAD
+		k_work_reschedule(&data->vcom_toggle_work, K_MSEC(data->current_vcom_interval));
+#endif
+		break;
+	default:
+		return -ENOTSUP;
+	}
+	return 0;
+}
+#endif /* CONFIG_PM_DEVICE */
+
+PM_DEVICE_DT_INST_DEFINE(0, ls0xx_pm_action);
+
+DEVICE_DT_INST_DEFINE(0, ls0xx_init, PM_DEVICE_DT_INST_GET(0), &ls0xx_data, &ls0xx_config, POST_KERNEL,
 		      CONFIG_DISPLAY_INIT_PRIORITY, &ls0xx_driver_api);
