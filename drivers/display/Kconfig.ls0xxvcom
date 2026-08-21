@@ -8,3 +8,10 @@ config DISPLAY_LS0XX_VCOM
 	select SPI
 	help
 	  modified sharp memory display driver to add serial vcom support
+
+config LS0XX_VCOM_THREAD_PRIO
+	int "Priority for the VCOM inversion thread"
+	default 3
+	depends on DISPLAY_LS0XX_VCOM
+	help
+	  Set the VCOM inversion thread priority

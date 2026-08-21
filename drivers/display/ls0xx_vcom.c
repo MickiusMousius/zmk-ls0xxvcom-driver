@@ -28,6 +28,8 @@ LOG_MODULE_REGISTER(ls0xx, CONFIG_DISPLAY_LOG_LEVEL);
 #define USE_VCOM_THREAD true
 #endif // DT_INST_PROP(0, serial_vcom_inversion)
 
+#define LS0XX_BUS_RETURN_DELAY_TICKS 4
+
 struct ls0xx_config {
 	struct spi_dt_spec bus;
 #if DT_INST_NODE_HAS_PROP(0, disp_en_gpios)
@@ -39,10 +41,10 @@ struct ls0xx_config {
 	int serial_vcom_int;
 };
 
-/* This mutex is added to prevent display refreshes from being interrupted
+/* This semaphore is added to prevent display refreshes from being interrupted
  by commands mid-refresh
  */
-K_MUTEX_DEFINE(ls0xx_spi_mutex);
+K_SEM_DEFINE(ls0xx_bus_sem, 0, 1);
 
 static int ls0xx_blanking_off(const struct device *dev)
 {
@@ -99,17 +101,17 @@ static void ls0xx_vcom_toggle(void *a, void *b, void *c)
 #elif DT_INST_PROP(0, serial_vcom_inversion)
 		/* Waits up to 240ms as if the screen isn't free by this point,
 		multiple refresh cycles were likey missed */
-		if (k_mutex_lock(&ls0xx_spi_mutex, K_MSEC(240)) == 0) {
+		if (k_sem_take(&ls0xx_bus_sem, K_MSEC(240)) == 0) {
 			uint8_t empty_cmd[2] = {0, 0};
 			/* Send empty command to toggle VCOM */
 			ls0xx_cmd(dev, empty_cmd, sizeof(empty_cmd));
-			/* Sleep before unlocking mutex based on errors in initial testing */
-			k_usleep(374);
+			/* Sleep before giving semaphore based on errors in testing */
+			k_sleep(K_TICKS(LS0XX_BUS_RETURN_DELAY_TICKS));
+			spi_release_dt(&config->bus);
+			k_sem_give(&ls0xx_bus_sem);
 		} else {
-			LOG_ERR("memory display mutex lock failed - cmd");
+			LOG_ERR("memory display semaphore not available - cmd");
 		}
-		k_mutex_unlock(&ls0xx_spi_mutex);
-		spi_release_dt(&config->bus);
 		k_msleep(config->serial_vcom_int);
 #endif // DT_INST_NODE_HAS_PROP(0, extcomin_gpios)
 	}
@@ -124,15 +126,15 @@ static int ls0xx_clear(const struct device *dev)
 	const struct ls0xx_config *config = dev->config;
 	uint8_t clear_cmd[2] = {LS0XX_BIT_CLEAR, 0};
 	int err;
-	if (k_mutex_lock(&ls0xx_spi_mutex, K_MSEC(240)) == 0) {
+	if (k_sem_take(&ls0xx_bus_sem, K_MSEC(240)) == 0) {
 		err = ls0xx_cmd(dev, clear_cmd, sizeof(clear_cmd));
-		k_usleep(374);
+		k_sleep(K_TICKS(LS0XX_BUS_RETURN_DELAY_TICKS));
+		spi_release_dt(&config->bus);
+		k_sem_give(&ls0xx_bus_sem);
 	} else {
-		LOG_ERR("memory display mutex lock failed - data");
+		LOG_ERR("memory display semaphore not available - data");
 		err = -EBUSY;
 	}
-	k_mutex_unlock(&ls0xx_spi_mutex);
-	spi_release_dt(&config->bus);
 	return err;
 }
 
@@ -175,7 +177,7 @@ static int ls0xx_update_display(const struct device *dev, uint16_t start_line, u
 	int bytes_per_line = LS0XX_PANEL_WIDTH / LS0XX_PIXELS_PER_BYTE;
 
 	LOG_DBG("Lines %d to %d", start_line, start_line + num_lines - 1);
-	if (k_mutex_lock(&ls0xx_spi_mutex, K_MSEC(240)) == 0) {
+	if (k_sem_take(&ls0xx_bus_sem, K_MSEC(240)) == 0) {
 		err = ls0xx_cmd(dev, write_cmd, sizeof(write_cmd));
 
 		for (int i = 0; i < num_lines; i++) {
@@ -201,13 +203,13 @@ static int ls0xx_update_display(const struct device *dev, uint16_t start_line, u
 		 * just reusing the write_cmd buffer
 		 */
 		err |= ls0xx_cmd(dev, write_cmd, sizeof(write_cmd));
+		k_sleep(K_TICKS(LS0XX_BUS_RETURN_DELAY_TICKS));
+		spi_release_dt(&config->bus);
+		k_sem_give(&ls0xx_bus_sem);
 	} else {
-		LOG_ERR("memory display mutex lock failed - refresh data");
+		LOG_ERR("memory display semaphore not available - refresh data");
 		err = -EBUSY;
 	}
-	k_usleep(374);
-	k_mutex_unlock(&ls0xx_spi_mutex);
-	spi_release_dt(&config->bus);
 	return err;
 }
 
@@ -325,11 +327,13 @@ static int ls0xx_init(const struct device *dev)
 	gpio_pin_configure_dt(&config->extcomin_gpio, GPIO_OUTPUT_LOW);
 #endif /* DT_INST_NODE_HAS_PROP(0, extcomin_gpios) */
 	data->vcom_state = false;
+	/* Give the semaphore to allow bus access */
+	k_sem_give(&ls0xx_bus_sem);
 #ifdef USE_VCOM_THREAD
 	/* Start thread for toggling VCOM */
 	k_tid_t vcom_toggle_tid = k_thread_create(
 		&vcom_toggle_thread, vcom_toggle_stack, K_THREAD_STACK_SIZEOF(vcom_toggle_stack),
-		ls0xx_vcom_toggle, (void *)dev, NULL, NULL, 3, 0, K_NO_WAIT);
+		ls0xx_vcom_toggle, (void *)dev, NULL, NULL, CONFIG_LS0XX_VCOM_THREAD_PRIO, 0, K_NO_WAIT);
 	k_thread_name_set(vcom_toggle_tid, "ls0xx_vcom");
 #endif // USE_VCOM_THREAD
 
