@@ -39,6 +39,7 @@ struct ls0xx_config {
 	struct gpio_dt_spec extcomin_gpio;
 #endif
 	int serial_vcom_int;
+	int idle_vcom_int;
 };
 
 /* This semaphore is added to prevent display refreshes from being interrupted
@@ -77,7 +78,8 @@ static int ls0xx_blanking_on(const struct device *dev)
 #endif
 #ifdef USE_VCOM_THREAD
 	struct ls0xx_data *data = dev->data;
-	data->current_vcom_interval = 1000;
+	const struct ls0xx_config *config_vcom = dev->config;
+	data->current_vcom_interval = config_vcom->idle_vcom_int;
 	k_work_reschedule(&data->vcom_toggle_work, K_MSEC(data->current_vcom_interval));
 #endif
 	return ret;
@@ -383,10 +385,11 @@ static const struct ls0xx_config ls0xx_config = {
 	.extcomin_gpio = GPIO_DT_SPEC_INST_GET(0, extcomin_gpios),
 #endif
 #if DT_INST_PROP(0, serial_vcom_inversion)
-	.serial_vcom_int = DT_INST_PROP_OR(0, serial_vcom_interval, LS0XX_MAX_VCOM_MSEC)
+	.serial_vcom_int = DT_INST_PROP_OR(0, serial_vcom_interval, LS0XX_MAX_VCOM_MSEC),
 #elif DT_INST_NODE_HAS_PROP(0, extcomin_gpios)
-	.serial_vcom_int = 1000 / DT_INST_PROP(0, extcomin_frequency)
+	.serial_vcom_int = 1000 / DT_INST_PROP(0, extcomin_frequency),
 #endif
+	.idle_vcom_int = DT_INST_PROP_OR(0, idle_vcom_interval, 1000)
 };
 
 static struct display_driver_api ls0xx_driver_api = {

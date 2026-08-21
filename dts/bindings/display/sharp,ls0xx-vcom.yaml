@@ -52,4 +52,10 @@ properties:
     type: boolean
     description: Natively rotate the display output 180 degrees
 
+  idle-vcom-interval:
+    type: int
+    default: 1000
+    description: Idle VCOM inversion interval
 
+      VCOM inversion interval in milliseconds used when the display is
+      blanked (idle). If not configured, 1000ms will be used.
