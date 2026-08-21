@@ -203,6 +203,7 @@ static int ls0xx_update_display(const struct device *dev, uint16_t start_line, u
 {
 	const struct ls0xx_config *config = dev->config;
 	uint8_t write_cmd[1] = {LS0XX_BIT_WRITECMD};
+#ifndef USE_DMA_MODE
 	uint8_t ln = start_line;
 	uint8_t dummy = 27;
 	struct spi_buf line_buf[3] = {
@@ -222,9 +223,10 @@ static int ls0xx_update_display(const struct device *dev, uint16_t start_line, u
 		.buffers = line_buf,
 		.count = ARRAY_SIZE(line_buf),
 	};
+#endif
 	int err;
 
-#if DT_INST_PROP(0, rotate_180)
+#if DT_INST_PROP(0, rotate_180) && !defined(USE_DMA_MODE)
 	uint8_t row_buf[LS0XX_PANEL_WIDTH / LS0XX_PIXELS_PER_BYTE];
 #endif
 	int bytes_per_line = LS0XX_PANEL_WIDTH / LS0XX_PIXELS_PER_BYTE;
