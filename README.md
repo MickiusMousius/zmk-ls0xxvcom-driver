@@ -10,7 +10,9 @@ The original Zephyr implementation does not satisfy this requirement (As at Sept
 
 Probably not.
 
-There is a PR in the works with Zephyr to address this issue & the ZMK dev team is also aware of the issue. So long as you update your firmware once the fixes are back-ported, your display will *probably* be fine.
+Mainline Zephyr has been updated to address this issue & the ZMK dhas backported the fix.
+
+ZMK 0.3 does not yet have the fix, so if you are using ZMK 0.3 you will need to use this driver for now.
 
 You've likely been using the unpatched driver for a long time. Initial testing shows that 2-year-old displays have any visible damage quickly reversed after using the new driver for a few minutes.
 
@@ -68,19 +70,33 @@ If this is all you do, the new VCOM inversion signals will not be getting sent t
 
 You will find this in your display's overlay file (e.g., `boards/vista508/vista508.overlay`).
 
-The following two new lines have been added:
+The following three new lines have been added:
 
 ```c
 serial-vcom-inversion;
 serial-vcom-interval = <17>;
+idle-vcom-interval = <100>;
 ```
 
 - The first line enables the inversion fix
-- The second line is the number of milliseconds to wait between inversions
+- The second line (`serial-vcom-interval`) is the inversion interval in milliseconds used when the screen is **active and visible**. To eliminate flickering, an interval of 17-33ms should be used.
+- The third line (`idle-vcom-interval`) is the inversion interval used when the screen is **blanked (idle)**. This defaults to 1000ms if omitted.
 
-An interval of at most 1000ms should be used, this may produce some flickering. To eliminate flickering an interval of 17-33ms can be used.
+### Power Analysis: Why `idle-vcom-interval` matters
 
-A shorter refresh interval will produce a more contrasty image. It will also slightly increase power consumption.
+When you see a faint pulsing at 1Hz, it's because the liquid crystals in the display are being inverted slowly. Speeding up the inversion reduces this visual flicker, but it means waking up the MCU more often.
+
+It's a common misconception that the CPU uses power based only on how *long* it works. In modern microcontrollers like the nRF52, the actual work of toggling the VCOM bit takes less than **0.1 milliseconds**. The real power drain comes from the **wakeup penalty** (spinning up the high-frequency clock and regulators), which creates a current spike of roughly ~3-5 mA for about 1ms.
+
+By dropping the VCOM frequency when the screen is blanked, you drastically increase the ratio of deep sleep:
+
+![Time Spent in Deep Sleep vs VCOM Interval](doc/sleep_ratio.png)
+
+Assuming deep sleep draws ~10µA and a wakeup spike averages 4mA for 1ms, here is the impact on your average VCOM power draw:
+
+![Average VCOM Power Draw](doc/power_draw.png)
+
+**The Sweet Spot:** We recommend an `idle-vcom-interval` of `<100>` (or 200). At 100ms, any faint pulsing on a blank screen blends together enough to mostly disappear, while cutting your background battery drain by more than half compared to running at 33ms constantly.
 
 # Testing Performed So Far
 
