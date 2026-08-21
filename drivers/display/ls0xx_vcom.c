@@ -100,8 +100,8 @@ static int ls0xx_cmd(const struct device *dev, uint8_t *buf, uint8_t len)
 	struct spi_buf_set buf_set = {.buffers = &cmd_buf, .count = 1};
 #if DT_INST_PROP(0, serial_vcom_inversion)
 	struct ls0xx_data *data = dev->data;
+	buf[0] &= ~LS0XX_BIT_VCOM;
 	buf[0] |= data->vcom_state ? LS0XX_BIT_VCOM : 0;
-	data->vcom_state = !data->vcom_state;
 #endif // DT_INST_PROP(0, serial_vcom_inversion)
 	ret = spi_write_dt(&config->bus, &buf_set);
 	return ret;
@@ -121,6 +121,7 @@ static void ls0xx_vcom_toggle_handler(struct k_work *work)
 	k_usleep(3);
 	gpio_pin_toggle_dt(&config->extcomin_gpio);
 #elif DT_INST_PROP(0, serial_vcom_inversion)
+	data->vcom_state = !data->vcom_state;
 	if (k_sem_take(&ls0xx_bus_sem, K_MSEC(240)) == 0) {
 		uint8_t empty_cmd[2] = {0, 0};
 		/* Send empty command to toggle VCOM */
