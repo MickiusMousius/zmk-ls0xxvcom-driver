@@ -1,40 +1,16 @@
 # How is this driver different to the one I already get with ZMK/Zephyr?
 
-It prevents display damage.
+ZMK/main & newer Zephyr version support VCOM inversion in the ls0xx driver.
 
-Sharp Memory LCDs require regular VCOM inversion to prevent permanent damage from DC bias buildup.
+Older versions of ZMK (e.g. 0.3) do not satisfy the strict VCOM inversion requirements for Sharp Memory LCDs, potentially causing electrolytic degradation over time.
 
-The original Zephyr implementation does not satisfy this requirement (As at September 2025), potentially causing electrolytic degradation of the liquid crystal material over time.
+This custom driver prevents display damage for older ZMK versions and adds several performance and battery optimizations:
 
-# Do I need to update to this driver right now?
+- **[Balanced VCOM Inversion](doc/vcom_inversion.md):** Maintains a strict 50% duty cycle to prevent DC bias capacitive buildup and permanent display damage.
+- **[DMA Batching (`dma-mode`)](doc/dma_mode.md):** Assembles frames in RAM and transmits them in a single hardware DMA call, cutting active CPU interrupt overhead by over 99%.
+- **[Dual VCOM Intervals](doc/inversion_intervals.md):** Allows configuring a fast VCOM refresh while the screen is active to prevent flicker, and a slow refresh while idle to save battery.
+- **[Hardware Rotation (`rotate-180`)](doc/rotation.md):** Flips the display output natively with practically zero overhead, avoiding the massive CPU and RAM penalties of conventional software UI rotation.
 
-Probably not.
-
-Mainline Zephyr has been updated to address this issue & the ZMK dhas backported the fix.
-
-ZMK 0.3 does not yet have the fix, so if you are using ZMK 0.3 you will need to use this driver for now.
-
-You've likely been using the unpatched driver for a long time. Initial testing shows that 2-year-old displays have any visible damage quickly reversed after using the new driver for a few minutes.
-
-# What is LCD DC Bias Damage?
-
-DC bias occurs when a constant voltage (rather than an alternating voltage) is applied across the liquid crystal material in an LCD. In Sharp Memory LCDs, this happens when the VCOM (common voltage) polarity isn't regularly inverted.
-
-## The Damage Mechanism
-
-**Electrolytic Degradation:** When DC voltage is continuously applied:
-
-- Ion migration occurs within the liquid crystal material
-- Charged particles accumulate at one side of the crystal structure
-- This buildup creates permanent chemical changes in the liquid crystal alignment
-- The crystal's ability to switch between transparent and opaque states becomes impaired
-
-## Visible Effects
-
-- **Image Retention/Burn-in:** Static images become permanently "ghosted" on the display
-- **Reduced Contrast:** The display becomes less able to show clear differences between light and dark areas
-- **Flickering:** Damaged crystals may flicker or show inconsistent behavior
-- **Complete Panel Failure:** In severe cases, sections of the display stop responding entirely
 
 # How to use the driver
 
@@ -63,6 +39,7 @@ If this is all you do, the new VCOM inversion signals will not be getting sent t
     serial-vcom-interval = <17>;
     idle-vcom-interval = <100>;
     dma-mode;
+    rotate-180;
     reg = <0>;
     width = <144>;
     height = <168>;
@@ -70,83 +47,22 @@ If this is all you do, the new VCOM inversion signals will not be getting sent t
 };
 ```
 
-You will find this in your display's overlay file (e.g., `boards/vista508/vista508.overlay`).
-
-The following four new lines have been added:
+The following five new lines have been added compared to the usual ls0xx driver:
 
 ```c
 serial-vcom-inversion;
 serial-vcom-interval = <17>;
 idle-vcom-interval = <100>;
 dma-mode;
+rotate-180;
 ```
 
-- The first line enables the inversion fix
+- The first line enables the inversion fix. Information on why you'd want this is [here](doc/vcom_inversion.md).
 - The second line (`serial-vcom-interval`) is the inversion interval in milliseconds used when the screen is **active and visible**. To eliminate flickering, an interval of 17-33ms should be used.
-- The third line (`idle-vcom-interval`) is the inversion interval used when the screen is **blanked (idle)**. This defaults to 1000ms if omitted.
-- The fourth line (`dma-mode`) enables **SPI Batching**. This allocates a single buffer in RAM to format the entire screen frame at once, allowing the DMA hardware to send it to the display in a single transaction while the CPU sleeps.
+- The third line (`idle-vcom-interval`) is the inversion interval used when the screen is **blanked (idle)**. This defaults to 1000ms if omitted. Information on choosing a suitable inversion interval can be found [here](doc/inversion_intervals.md).
+- The fourth line (`dma-mode`) enables **SPI Batching**. This allocates a single buffer in RAM to format the entire screen frame at once, allowing the DMA hardware to send it to the display in a single transaction while the CPU sleeps. Information about DMA mode can be found [here](doc/dma_mode.md).
+- The fifth line (`rotate-180`) flips the display output natively in the driver, avoiding costly software rotation. Learn why this is critical for performance and battery life [here](doc/rotation.md).
 
-### Performance: Why `dma-mode` matters
-
-Without `dma-mode`, the driver sends pixel data to the display one line at a time. This means the number of individual SPI transactions per frame is equal to your display's pixel height (e.g., 168 separate transactions for a 144x168 display). This forces the MCU to wake up and handle hardware interrupts for every single line.
-
-Enabling `dma-mode` reduces this to **1 transaction per frame**, cutting the CPU interrupt overhead by over 99% regardless of your display size.
-
-**Pros:**
-* Drastically reduces active CPU time during display updates.
-* Increases battery life by allowing the CPU to sleep while the DMA hardware handles the SPI transfer.
-* Reduces bus contention if other devices share the SPI bus.
-
-**Cons:**
-* Increases static RAM (SRAM) usage by roughly `(Display Height) * (Display Width in Bytes + 2)` bytes. For a 144x168 display, this uses about 3.3 KB of RAM. (This is generally insignificant on modern microcontrollers like the nRF52840 which has 256 KB of RAM, but could be a factor on severely RAM-constrained chips).
-
-### Hardware Configuration: Choosing the right SPI Peripheral for EasyDMA
-
-In order to actually take advantage of `dma-mode` on Nordic nRF52 devices (such as the nRF52840 used in many ZMK keyboards), you must ensure your SPI peripheral is configured to use the EasyDMA driver (`nordic,nrf-spim`).
-
-If your board defines the SPI bus as standard SPI (`nordic,nrf-spi`), `dma-mode` will not work. You can explicitly override this in your overlay file where the SPI bus is defined:
-
-```c
-&spi0 {
-    compatible = "nordic,nrf-spim"; /* Use SPIM (with EasyDMA) instead of SPI */
-    status = "okay";
-    /* ... pinctrl and cs-gpios ... */
-};
-```
-
-> [!WARNING]
-> **Energy Consumption Note:** On the nRF52840, the `spi3` peripheral is a special high-speed SPI instance. Using `spi3` (SPIM3) requires the high-frequency clock and will draw significantly more base current (often an additional 1-2 mA) compared to `spi0`, `spi1`, or `spi2`. For low-power, battery-operated devices like wireless keyboards, you should strongly prefer `spi0`, `spi1`, or `spi2` for this driver to maximize battery life.
-
-### Power Analysis: Why `idle-vcom-interval` matters
-
-When you see a faint pulsing at 1Hz, it's because the liquid crystals in the display are being inverted slowly. Speeding up the inversion reduces this visual flicker, but it means waking up the MCU more often.
-
-It's a common misconception that the CPU uses power based only on how *long* it works. In modern microcontrollers like the nRF52, the actual work of toggling the VCOM bit takes less than **0.1 milliseconds**. The real power drain comes from the **wakeup penalty** (spinning up the high-frequency clock and regulators), which creates a current spike of roughly ~3-5 mA for about 1ms.
-
-By dropping the VCOM frequency when the screen is blanked, you drastically increase the ratio of deep sleep:
-
-![Time Spent in Deep Sleep vs VCOM Interval](doc/sleep_ratio.png)
-
-Assuming deep sleep draws ~10µA and a wakeup spike averages 4mA for 1ms, here is the impact on your average VCOM power draw:
-
-![Average VCOM Power Draw](doc/power_draw.png)
-
-**The Sweet Spot:** We recommend an `idle-vcom-interval` of `<100>` (or 200). At 100ms, any faint pulsing on a blank screen blends together enough to mostly disappear, while cutting your background battery drain by more than half compared to running at 33ms constantly.
-
-# Testing Performed So Far
-
-I have tested this code using the most current ZMK release as of Septmberr 2025, here are the results of that testing:
- * LS027B7DH01A - Works a treat, greatly improves contrast
- * LS013B7DH05 - Works a treat, noticeable improvement in contrast, not as pronounced as above display type
- * LS011B7DH03 - Works well, some improvement in contrast but difference is marginal (the display being tested was much newer than the other two displays)
-
-I have observed that old displays improve contrast & have less power off ghosting after running with this update.
-
-Display flickering is noticeable on LS013B7DH05 & LS027B7DH01A at anything less than 33ms refresh interval when viewed off axis. Using an interval of 17ms produces perfect results with excellent contrast & no flickering.
-
-There is no image corruption or apparent bus fighting when using this updated driver.
-
-Higher refresh rates do produce higher energy consumption, however this was tested to be 80uA in the worst case.
 
 # Attribution
 
