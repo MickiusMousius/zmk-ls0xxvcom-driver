@@ -100,6 +100,23 @@ Enabling `dma-mode` reduces this to **1 transaction per frame**, cutting the CPU
 **Cons:**
 * Increases static RAM (SRAM) usage by roughly `(Display Height) * (Display Width in Bytes + 2)` bytes. For a 144x168 display, this uses about 3.3 KB of RAM. (This is generally insignificant on modern microcontrollers like the nRF52840 which has 256 KB of RAM, but could be a factor on severely RAM-constrained chips).
 
+### Hardware Configuration: Choosing the right SPI Peripheral for EasyDMA
+
+In order to actually take advantage of `dma-mode` on Nordic nRF52 devices (such as the nRF52840 used in many ZMK keyboards), you must ensure your SPI peripheral is configured to use the EasyDMA driver (`nordic,nrf-spim`).
+
+If your board defines the SPI bus as standard SPI (`nordic,nrf-spi`), `dma-mode` will not work. You can explicitly override this in your overlay file where the SPI bus is defined:
+
+```c
+&spi0 {
+    compatible = "nordic,nrf-spim"; /* Use SPIM (with EasyDMA) instead of SPI */
+    status = "okay";
+    /* ... pinctrl and cs-gpios ... */
+};
+```
+
+> [!WARNING]
+> **Energy Consumption Note:** On the nRF52840, the `spi3` peripheral is a special high-speed SPI instance. Using `spi3` (SPIM3) requires the high-frequency clock and will draw significantly more base current (often an additional 1-2 mA) compared to `spi0`, `spi1`, or `spi2`. For low-power, battery-operated devices like wireless keyboards, you should strongly prefer `spi0`, `spi1`, or `spi2` for this driver to maximize battery life.
+
 ### Power Analysis: Why `idle-vcom-interval` matters
 
 When you see a faint pulsing at 1Hz, it's because the liquid crystals in the display are being inverted slowly. Speeding up the inversion reduces this visual flicker, but it means waking up the MCU more often.
